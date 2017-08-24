@@ -113,6 +113,7 @@ class WaveNetModel(object):
             self.filter_width, self.dilations, self.scalar_input,
             self.initial_filter_width)
         self.variables = self._create_variables()
+        self.layer_info = dict()
 
     @staticmethod
     def calculate_receptive_field(filter_width, dilations, scalar_input,
@@ -123,6 +124,11 @@ class WaveNetModel(object):
         else:
             receptive_field += filter_width - 1
         return receptive_field
+
+    def add_layer_info(self, type, layer, filters = None, biases = None):
+        index = len(self.layer_info)
+        layer_name = "{:05d}_{}".format(index, type)
+        self.layer_info[layer_name] = {'name': layer_name, 'layer': layer, 'filters': filters, 'biases': biases}
 
     def _create_variables(self):
         '''This function creates all variables used by the network.
@@ -240,7 +246,9 @@ class WaveNetModel(object):
         '''
         with tf.name_scope('causal_layer'):
             weights_filter = self.variables['causal_layer']['filter']
-            return causal_conv(input_batch, weights_filter, 1)
+            conv = causal_conv(input_batch, weights_filter, 1)
+            self.add_layer_info("causal", conv, weights_filter)
+            return conv
 
     def _create_dilation_layer(self, input_batch, layer_index, dilation,
                                global_condition_batch, output_width):
@@ -275,6 +283,8 @@ class WaveNetModel(object):
         weights_filter = variables['filter']
         weights_gate = variables['gate']
 
+        self.add_layer_info("input", input_batch)
+
         conv_filter = causal_conv(input_batch, weights_filter, dilation)
         conv_gate = causal_conv(input_batch, weights_gate, dilation)
 
@@ -297,8 +307,15 @@ class WaveNetModel(object):
             gate_bias = variables['gate_bias']
             conv_filter = tf.add(conv_filter, filter_bias)
             conv_gate = tf.add(conv_gate, gate_bias)
+            self.add_layer_info("cf", conv_filter, weights_filter, filter_bias)
+            self.add_layer_info("cg", conv_gate, weights_gate, gate_bias)
+        else:
+            self.add_layer_info("cf", conv_filter, weights_filter)
+            self.add_layer_info("cg", conv_gate, weights_gate)
 
         out = tf.tanh(conv_filter) * tf.sigmoid(conv_gate)
+
+        self.add_layer_info("mul", out)
 
         # The 1x1 conv to produce the residual output
         weights_dense = variables['dense']
@@ -317,6 +334,11 @@ class WaveNetModel(object):
             skip_bias = variables['skip_bias']
             transformed = transformed + dense_bias
             skip_contribution = skip_contribution + skip_bias
+            self.add_layer_info("dense", transformed, weights_dense, dense_bias)
+            self.add_layer_info("skip", skip_contribution, weights_skip, skip_bias)
+        else:
+            self.add_layer_info("dense", transformed, weights_dense)
+            self.add_layer_info("skip", skip_contribution, weights_skip)
 
         if self.histograms:
             layer = 'layer{}'.format(layer_index)
@@ -403,8 +425,9 @@ class WaveNetModel(object):
         else:
             initial_channels = self.quantization_channels
 
-        current_layer = self._create_causal_layer(current_layer)
+        self.add_layer_info("input", current_layer)
 
+        current_layer = self._create_causal_layer(current_layer)
         output_width = tf.shape(input_batch)[1] - self.receptive_field + 1
 
         # Add all defined dilation layers.
@@ -436,13 +459,22 @@ class WaveNetModel(object):
             # all up here.
             total = sum(outputs)
             transformed1 = tf.nn.relu(total)
+            self.add_layer_info("relu", transformed1)
             conv1 = tf.nn.conv1d(transformed1, w1, stride=1, padding="SAME")
             if self.use_biases:
                 conv1 = tf.add(conv1, b1)
+                self.add_layer_info("conv1", conv1, w1, b1)
+            else:
+                self.add_layer_info("conv1", conv1, w1)
+
             transformed2 = tf.nn.relu(conv1)
+            self.add_layer_info("relu", transformed2)
             conv2 = tf.nn.conv1d(transformed2, w2, stride=1, padding="SAME")
             if self.use_biases:
                 conv2 = tf.add(conv2, b2)
+                self.add_layer_info("conv", conv2, w2, b2)
+            else:
+                self.add_layer_info("conv", conv2, w2)
 
         return conv2
 

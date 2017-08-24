@@ -32,7 +32,7 @@ def get_arguments():
         """Ensure argument is a positive float."""
         if float(f) < 0:
             raise argparse.ArgumentTypeError(
-                    'Argument must be greater than zero')
+                'Argument must be greater than zero')
         return float(f)
 
     parser = argparse.ArgumentParser(description='WaveNet generation script')
@@ -53,7 +53,7 @@ def get_arguments():
         type=str,
         default=LOGDIR,
         help='Directory in which to store the logging '
-        'information for TensorBoard.')
+             'information for TensorBoard.')
     parser.add_argument(
         '--wavenet_params',
         type=str,
@@ -72,7 +72,7 @@ def get_arguments():
     parser.add_argument(
         '--fast_generation',
         type=_str_to_bool,
-        default=True,
+        default=False,
         help='Use fast generation')
     parser.add_argument(
         '--wav_seed',
@@ -104,8 +104,8 @@ def get_arguments():
 
         if arguments.gc_id is None:
             raise ValueError("Globally conditioning, but global condition was "
-                              "not specified. Use --gc_id to specify global "
-                              "condition.")
+                             "not specified. Use --gc_id to specify global "
+                             "condition.")
 
     return arguments
 
@@ -130,6 +130,31 @@ def create_seed(filename,
                         lambda: tf.constant(window_size))
 
     return quantized[:cut_index]
+
+
+def save_layer(sess, layer_info, feed_dict=None):
+    name = layer_info['name']
+    layer = layer_info['layer']
+    filters = layer_info['filters']
+    biases = layer_info['biases']
+
+    value = sess.run(layer, feed_dict)
+    file_name = '/home/fm/dump/' + name + "-out-%d_%d_%d.csv" % value.shape
+    l_flat = tf.reshape(value, [-1, value.shape[2]])
+    d = sess.run(l_flat)
+    np.savetxt(file_name, d, delimiter=";")
+
+    if filters is not None:
+        f = sess.run(filters, feed_dict)
+        file_name = '/home/fm/dump/' + name + "-filters-%d_%d_%d.csv" % f.shape
+        f_flat = tf.reshape(f, [-1, f.shape[2]])
+        d = sess.run(f_flat)
+        np.savetxt(file_name, d, delimiter=";")
+
+    if biases is not None:
+        b = sess.run(biases, feed_dict)
+        file_name = '/home/fm/dump/' + name + "-biases-%d_%d_%d.csv" % (b.shape[0], 1, 1)
+        np.savetxt(file_name, b, delimiter=";")
 
 
 def main():
@@ -183,6 +208,7 @@ def main():
                            quantization_channels,
                            net.receptive_field)
         waveform = sess.run(seed).tolist()
+
     else:
         # Silence with a single random sample at the end.
         waveform = [quantization_channels / 2] * (net.receptive_field - 1)
@@ -221,6 +247,14 @@ def main():
         # Run the WaveNet to predict the next sample.
         prediction = sess.run(outputs, feed_dict={samples: window})[0]
 
+        np.savetxt("/home/fm/dump/prediction.csv", prediction, delimiter=";")
+        # for name in net.layer_info:
+        #     save_layer(sess, net.layer_info[name], {samples: window})
+        # save_layer(sess, net.layers["input"], "input", {samples: window})
+        # save_layer(sess, net.layers["causal_layer"], "causal_layer_out", {samples: window})
+        # np.savetxt("window.csv", window, delimiter=";")
+
+
         # Scale prediction distribution using temperature.
         np.seterr(divide='ignore')
         scaled_prediction = np.log(prediction) / args.temperature
@@ -233,9 +267,9 @@ def main():
         # scaling.
         if args.temperature == 1.0:
             np.testing.assert_allclose(
-                    prediction, scaled_prediction, atol=1e-5,
-                    err_msg='Prediction scaling at temperature=1.0 '
-                            'is not working as intended.')
+                prediction, scaled_prediction, atol=1e-5,
+                err_msg='Prediction scaling at temperature=1.0 '
+                        'is not working as intended.')
 
         sample = np.random.choice(
             np.arange(quantization_channels), p=scaled_prediction)
@@ -251,7 +285,7 @@ def main():
 
         # If we have partial writing, save the result so far.
         if (args.wav_out_path and args.save_every and
-                (step + 1) % args.save_every == 0):
+                        (step + 1) % args.save_every == 0):
             out = sess.run(decode, feed_dict={samples: waveform})
             write_wav(out, wavenet_params['sample_rate'], args.wav_out_path)
 
