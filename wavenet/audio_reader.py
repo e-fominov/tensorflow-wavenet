@@ -175,7 +175,8 @@ class AudioReader(object):
                 if self.sample_size:
                     # Cut samples into pieces of size receptive_field +
                     # sample_size with receptive_field overlap
-                    while len(audio) > self.receptive_field:
+                    #while len(audio) > self.receptive_field:
+                    if len(audio) > self.receptive_field:
                         piece = audio[:(self.receptive_field +
                                         self.sample_size), :]
                         sess.run(self.enqueue,
